@@ -74,7 +74,7 @@ def provisionMachineSSL(machine,certBaseName,cn,ipAddrs,dnsNames)
   system("./../../lib/init-ssl ssl #{certBaseName} #{cn} #{subjAltNameString}") or abort("failed generating #{cn} SSL artifacts")
   machine.vm.provision :file, :source => tarFile, :destination => "/tmp/ssl.tar"
   machine.vm.provision :shell, :inline => "mkdir -p /etc/kubernetes/ssl && tar -C /etc/kubernetes/ssl -xf /tmp/ssl.tar", :privileged => true
-  system("rm ssl/#{certBaseName}")
+  system("rm ssl/#{certBaseName}.*")
 end
 
 Vagrant.configure("2") do |config|
