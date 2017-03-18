@@ -38,6 +38,8 @@ ETCD_CLOUD_CONFIG_PATH = File.expand_path("etcd-cloud-config.yaml")
 CONTROLLER_CLOUD_CONFIG_PATH = File.expand_path("../generic/controller-install.sh")
 WORKER_CLOUD_CONFIG_PATH = File.expand_path("../generic/worker-install.sh")
 
+# Add SubjectAltNames here
+dnsNames = ["kube.sea.sentimens.com", "seattle.sentimens.kube", "seattle.kube"]
 
 def etcdIP(num)
   return "172.17.4.#{num+50}"
@@ -51,8 +53,13 @@ def workerIP(num)
   return "172.17.4.#{num+200}"
 end
 
-# Add SubjectAltNames here
-dnsNames = []
+if dnsNames.length == 0 then
+    print 'dnsNames array is empty, are you sure you want to continue? (y/N) '
+    continue=STDIN.gets.chomp
+    unless continue.length > 0 and ['y', 'Y'].include? continue[0] then
+        exit
+    end
+end
 
 controllerIPs = [*1..$controller_count].map{ |i| controllerIP(i) } <<  CONTROLLER_CLUSTER_IP
 etcdIPs = [*1..$etcd_count].map{ |i| etcdIP(i) }
@@ -68,13 +75,13 @@ etcd_endpoints = etcdIPs.map.with_index{ |ip, i| "http://#{ip}:2379" }.join(",")
 def provisionMachineSSL(machine,certBaseName,cn,ipAddrs,dnsNames)
   tarFile = "ssl/#{cn}.tar"
   ipString = ipAddrs.map.with_index { |ip, i| "IP.#{i+1}=#{ip}"}.join(",")
-  dnsString = dnsNames.map.with_index { |dns, i| "DNS.#{i+4}=#{dns}"}.join(",")
+  dnsString = dnsNames.map.with_index { |dns, i| "DNS.#{i+5}=#{dns}"}.join(",")
   subjAltNameString = "#{ipString}" + (dnsString.length > 0  ? ",#{dnsString}" : "")
 
   system("./../../lib/init-ssl ssl #{certBaseName} #{cn} #{subjAltNameString}") or abort("failed generating #{cn} SSL artifacts")
   machine.vm.provision :file, :source => tarFile, :destination => "/tmp/ssl.tar"
   machine.vm.provision :shell, :inline => "mkdir -p /etc/kubernetes/ssl && tar -C /etc/kubernetes/ssl -xf /tmp/ssl.tar", :privileged => true
-  system("rm ssl/#{certBaseName}.*")
+  #system("rm -f ssl/#{certBaseName}.*")
 end
 
 Vagrant.configure("2") do |config|
@@ -193,7 +200,15 @@ Vagrant.configure("2") do |config|
       env_file.write("SERVICE_IP_RANGE=#{SERVICE_IP_RANGE}\n")
       env_file.write("K8S_SERVICE_IP=#{K8S_SERVICE_IP}\n")
       env_file.write("DNS_SERVICE_IP=#{DNS_SERVICE_IP}\n")
+
+      # The first worker will be the edge router (if more than one worker)
+      if i == $worker_count and $worker_count > 1 then
+          env_file.write("SCHEDULABLE=false\n")
+          env_file.write("NODE_LABELS=role=edge-router\n")
+      end
+
       env_file.close
+
 
       ["vmware_fusion", "vmware_workstation"].each do |vmware|
         worker.vm.provider vmware do |v|
@@ -208,7 +223,7 @@ Vagrant.configure("2") do |config|
       workerIP = workerIP(i)
       worker.vm.network :private_network, ip: workerIP
 
-      provisionMachineSSL(worker,"worker","kube-worker-#{workerIP}",[workerIP], [])
+      provisionMachineSSL(worker,"worker","kube-worker-#{workerIP}",[workerIP], dnsNames)
 
       worker.vm.provision :file, :source => env_file, :destination => "/tmp/coreos-kube-options.env"
       worker.vm.provision :shell, :inline => "mkdir -p /run/coreos-kubernetes && mv /tmp/coreos-kube-options.env /run/coreos-kubernetes/options.env", :privileged => true
